@@ -10,7 +10,9 @@
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "prisma:deploy": "prisma migrate deploy",
+    "db:setup": "npm run prisma:generate && npm run prisma:push"
   },
   "repository": {
     "type": "git",
