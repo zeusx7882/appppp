@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Key {
+  id        String    @id @default(cuid())
+  key       String    @unique
+  gameAppId String
+  gameName  String
+  status    KeyStatus @default(AVAILABLE)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+enum KeyStatus {
+  AVAILABLE
+  USED
+}
