@@ -57,7 +57,7 @@ Validates and atomically consumes an available key.
 
 Request:
 ```json
-{ "key": "Redded2-abc123" }
+{ "key": "GAMEKEY-abc123" }
 ```
 
 Success (`200`):
@@ -66,7 +66,7 @@ Success (`200`):
   "success": true,
   "game": {
     "appId": "1174180",
-    "name": "Redded2"
+    "name": "Sample Game"
   }
 }
 ```
@@ -82,7 +82,7 @@ Checks if the key exists and is available **without consuming it**.
 
 Request:
 ```json
-{ "key": "Redded2-abc123" }
+{ "key": "GAMEKEY-abc123" }
 ```
 
 Existing key (`200`):
@@ -93,7 +93,7 @@ Existing key (`200`):
   "status": "AVAILABLE",
   "game": {
     "appId": "1174180",
-    "name": "Redded2"
+    "name": "Sample Game"
   }
 }
 ```
