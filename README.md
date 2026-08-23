@@ -84,6 +84,7 @@ Erros:
 - `400` key inválida/ausente/vazia
 - `404` key não encontrada
 - `400` key já utilizada
+- `500` erro interno
 
 ### POST `/api/keys/check`
 Body:
@@ -98,6 +99,14 @@ Key existente (`200`):
   "valid": true,
   "status": "AVAILABLE",
   "game": { "appId": "1174180", "name": "Sample Game" }
+}
+```
+
+Key ausente (`404`):
+```json
+{
+  "exists": false,
+  "valid": false
 }
 ```
 
