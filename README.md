@@ -1,104 +1,108 @@
 # Free Drop Keys API
 
-Production-ready REST API for validating Free Drop game keys.
+API REST para validação de keys Free Drop, pronta para deploy em Node.js + PostgreSQL com Prisma.
 
 ## Stack
 - Node.js + Express + TypeScript
 - Prisma ORM
 - PostgreSQL
 
-## Environment
-Create a `.env` file from `.env.example`:
+## Variáveis de ambiente / Environment
+Copie o exemplo:
 
 ```bash
 cp .env.example .env
 ```
 
-Required variables:
+Obrigatórias em produção:
+- `DATABASE_URL` (conexão PostgreSQL)
 
-- `DATABASE_URL` (PostgreSQL connection string)
-- `PORT` (optional, default `3001`)
-- `NODE_ENV` (optional, default `development`)
+Opcional:
+- `PORT` (default `3001`; em produção a plataforma injeta esse valor)
+- `NODE_ENV` (`production` recomendado em deploy)
 
-## Install & Setup
-
-```bash
-npm install
-npm run prisma:generate
-npm run prisma:push
-npm run dev
-```
+> Nunca commite credenciais reais.
 
 ## Scripts
+- `npm run dev` - desenvolvimento (watch)
+- `npm run typecheck` - checagem TypeScript
+- `npm run build` - build para `dist/`
+- `npm run start` - inicia API compilada
+- `npm run prisma:generate` - gera Prisma Client
+- `npm run prisma:migrate` - migrações locais (dev)
+- `npm run prisma:push` - aplica schema sem migration (setup rápido)
+- `npm run prisma:deploy` - aplica migrations em produção
+- `npm run db:setup` - setup inicial do banco para desenvolvimento
 
-- `npm run dev` - run server with watch mode
-- `npm run build` - compile TypeScript to `dist/`
-- `npm run typecheck` - run strict TS type-check
-- `npm run start` - start compiled server
-- `npm run prisma:generate` - generate Prisma client
-- `npm run prisma:migrate` - create/apply Prisma migrations (dev)
-- `npm run prisma:push` - push schema to database
+## Deploy na ShardCloud
+Configuração recomendada da aplicação:
 
-## Prisma Data Model
+- **Build command**:
+  ```bash
+  npm install && npm run prisma:generate && npm run build
+  ```
+- **Start command**:
+  ```bash
+  npm run start
+  ```
+- **Environment variables**:
+  - `DATABASE_URL`
+  - `NODE_ENV=production`
+  - `PORT` (geralmente fornecida pela própria ShardCloud)
 
-`prisma/schema.prisma` defines:
+### Domínio
+Após criar o app na ShardCloud, configure o domínio público para:
 
-- `Key` model (`id`, `key`, `gameAppId`, `gameName`, `status`, `usedAt`, `createdAt`)
-- `KeyStatus` enum (`AVAILABLE`, `USED`)
+`https://byzeuskeys.shardweb.app`
 
-## API
+Este repositório apenas prepara a API; o apontamento/configuração final do domínio é feito no painel da ShardCloud.
 
-Base routes:
-- `GET /` and `GET /health` -> service status
-- Key routes under `/api/keys`
+## Rotas da API
+- `GET /` e `GET /health`
+- `POST /api/keys/validate`
+- `POST /api/keys/check`
+
+Base pública pretendida após deploy:
+
+`https://byzeuskeys.shardweb.app`
 
 ### POST `/api/keys/validate`
-Validates and atomically consumes an available key.
-
-Request:
+Body:
 ```json
 { "key": "GAMEKEY-abc123" }
 ```
 
-Success (`200`):
+Sucesso (`200`):
 ```json
 {
   "success": true,
-  "game": {
-    "appId": "1174180",
-    "name": "Sample Game"
-  }
+  "game": { "appId": "1174180", "name": "Sample Game" }
 }
 ```
 
-Possible errors:
-- `400` invalid/missing/empty key
-- `404` key not found
-- `400` key already used
-- `500` internal server error (safe, no internals leaked)
+Erros:
+- `400` key inválida/ausente/vazia
+- `404` key não encontrada
+- `400` key já utilizada
+- `500` erro interno
 
 ### POST `/api/keys/check`
-Checks if the key exists and is available **without consuming it**.
-
-Request:
+Body:
 ```json
 { "key": "GAMEKEY-abc123" }
 ```
 
-Existing key (`200`):
+Key existente (`200`):
 ```json
 {
   "exists": true,
   "valid": true,
   "status": "AVAILABLE",
-  "game": {
-    "appId": "1174180",
-    "name": "Sample Game"
-  }
+  "game": { "appId": "1174180", "name": "Sample Game" }
 }
 ```
 
-Missing key (`404`):
+Key ausente (`404`):
 ```json
 {
   "exists": false,
@@ -106,29 +110,13 @@ Missing key (`404`):
 }
 ```
 
-## Key Management (Safe Workflow)
+## Criação de keys (sem endpoint público)
+Não existe endpoint admin público para criar keys.
+Use Prisma (`prisma studio`, `seed` ou operação direta no PostgreSQL) por operador confiável.
 
-This API intentionally does **not** expose a public admin key-creation endpoint.
-Use Prisma workflows instead:
-
-- `npx prisma studio` for manual key management
-- or create controlled scripts/seeds run by trusted operators only
-
-## Production Notes
-
-- Request JSON body is size-limited.
-- `x-powered-by` header is disabled.
-- Prisma disconnects gracefully on shutdown signals.
-- Error responses avoid exposing stack traces or `DATABASE_URL`.
-
-## Verification
-
-Run:
-
+## Verificação local
 ```bash
 npm run prisma:generate
 npm run typecheck
 npm run build
 ```
-
-Then test endpoints locally with curl/Postman.

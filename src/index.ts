@@ -10,6 +10,7 @@ const app = express();
 app.disable("x-powered-by");
 app.use(cors());
 app.use(express.json({ limit: "16kb" }));
+app.use(express.urlencoded({ extended: false, limit: "16kb" }));
 
 app.get(["/", "/health"], (_req, res) => {
   res.json({
@@ -21,7 +22,7 @@ app.get(["/", "/health"], (_req, res) => {
 app.use("/api/keys", keysRouter);
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  if (err instanceof SyntaxError) {
+  if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({ error: "Invalid JSON payload." });
   }
 
