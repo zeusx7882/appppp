@@ -19,9 +19,11 @@ const extractKey = (body: unknown): string | null => {
 // POST /api/keys/redeem
 router.post("/redeem", async (req, res) => {
   try {
-    const body = req.body as { key?: unknown; discordId?: unknown };
+    const body = req.body as { key?: unknown; discordId?: unknown; discordUsername?: unknown };
     const rawKey = typeof body.key === "string" ? body.key.trim().toUpperCase() : null;
     const discordId = typeof body.discordId === "string" ? body.discordId.trim() : null;
+    const discordUsername =
+      typeof body.discordUsername === "string" ? body.discordUsername.trim() : null;
 
     if (!rawKey || !discordId) {
       return res.status(400).json({ success: false, message: "Parâmetros inválidos." });
@@ -49,14 +51,19 @@ router.post("/redeem", async (req, res) => {
         status: KeyStatus.USED,
         usedAt: now,
         usedBy: discordId,
+        usedByUsername: discordUsername,
         redeemedAt: now,
       },
     });
 
     if (updated.count === 0) {
+      // Race condition: another request claimed the key between our read and update.
       const fresh = await prisma.key.findUnique({ where: { key: rawKey } });
+      if (!fresh) {
+        return res.status(404).json({ success: false, message: "Key não encontrada." });
+      }
       const msg =
-        fresh?.usedBy === discordId
+        fresh.usedBy === discordId
           ? "Você já resgatou esta key"
           : "Esta key já foi utilizada";
       return res.status(400).json({ success: false, message: msg });
@@ -105,7 +112,7 @@ router.get("/activated", async (req, res) => {
     });
   } catch (err) {
     console.error("[activated]", err);
-    return res.json({ games: [] });
+    return res.status(500).json({ games: [] });
   }
 });
 
