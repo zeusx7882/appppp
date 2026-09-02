@@ -1,52 +1,88 @@
-import { KeyStatus } from "@prisma/client";
+import { KeyStatus, Prisma } from "@prisma/client";
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
 
 const router = Router();
 
-const extractKey = (body: unknown): string | null => {
-  if (!body || typeof body !== "object") {
+const gameSelect = {
+  select: {
+    appId: true,
+    name: true,
+  },
+} as const;
+
+/**
+ * Normaliza a key com trim().toUpperCase() e mantem a variante original
+ * (apenas com trim) como fallback, para keys gravadas em minusculas.
+ */
+const keyCandidates = (value: unknown): string[] | null => {
+  if (typeof value !== "string") {
     return null;
   }
-  const key = (body as { key?: unknown }).key;
-  if (typeof key !== "string") {
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
     return null;
   }
-  const normalized = key.trim();
-  return normalized.length > 0 ? normalized : null;
+
+  const upper = trimmed.toUpperCase();
+  return upper === trimmed ? [upper] : [upper, trimmed];
+};
+
+/**
+ * Loga apenas informacoes seguras (mensagem e codigo/meta do Prisma),
+ * nunca DATABASE_URL, tokens ou outros segredos.
+ */
+const logSafeError = (scope: string, err: unknown): void => {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    console.error(`[${scope}] Prisma error`, {
+      code: err.code,
+      meta: err.meta,
+      message: err.message,
+    });
+    return;
+  }
+
+  if (err instanceof Error) {
+    console.error(`[${scope}] ${err.name}: ${err.message}`);
+    return;
+  }
+
+  console.error(`[${scope}] Unknown error`);
 };
 
 // POST /api/keys/redeem
 router.post("/redeem", async (req, res) => {
   try {
-    const body = req.body as { key?: unknown; discordId?: unknown; discordUsername?: unknown };
-    const rawKey = typeof body.key === "string" ? body.key.trim().toUpperCase() : null;
-    const discordId = typeof body.discordId === "string" ? body.discordId.trim() : null;
+    const body = (req.body ?? {}) as {
+      key?: unknown;
+      discordId?: unknown;
+      discordUsername?: unknown;
+    };
+
+    const candidates = keyCandidates(body.key);
+    const discordId =
+      typeof body.discordId === "string" && body.discordId.trim().length > 0
+        ? body.discordId.trim()
+        : null;
     const discordUsername =
-      typeof body.discordUsername === "string" ? body.discordUsername.trim() : null;
+      typeof body.discordUsername === "string" && body.discordUsername.trim().length > 0
+        ? body.discordUsername.trim()
+        : null;
 
-    if (!rawKey || !discordId) {
-      return res.status(400).json({ success: false, message: "Parâmetros inválidos." });
+    if (!candidates) {
+      return res.status(400).json({ success: false, message: "Key inválida" });
     }
 
-    const existing = await prisma.key.findUnique({ where: { key: rawKey } });
-
-    if (!existing) {
-      return res.status(404).json({ success: false, message: "Key não encontrada." });
-    }
-
-    if (existing.status === KeyStatus.USED) {
-      const msg =
-        existing.usedBy === discordId
-          ? "Você já resgatou esta key"
-          : "Esta key já foi utilizada";
-      return res.status(400).json({ success: false, message: msg });
+    if (!discordId) {
+      return res.status(400).json({ success: false, message: "discordId inválido" });
     }
 
     const now = new Date();
 
-    const updated = await prisma.key.updateMany({
-      where: { key: rawKey, status: KeyStatus.AVAILABLE },
+    // Atualizacao atomica: apenas uma requisicao consegue marcar a key como USED.
+    const claimed = await prisma.key.updateMany({
+      where: { key: { in: candidates }, status: KeyStatus.AVAILABLE },
       data: {
         status: KeyStatus.USED,
         usedAt: now,
@@ -56,27 +92,32 @@ router.post("/redeem", async (req, res) => {
       },
     });
 
-    if (updated.count === 0) {
-      // Race condition: another request claimed the key between our read and update.
-      const fresh = await prisma.key.findUnique({ where: { key: rawKey } });
-      if (!fresh) {
-        return res.status(404).json({ success: false, message: "Key não encontrada." });
-      }
-      const msg =
-        fresh.usedBy === discordId
-          ? "Você já resgatou esta key"
-          : "Esta key já foi utilizada";
-      return res.status(400).json({ success: false, message: msg });
+    const record = await prisma.key.findFirst({
+      where: { key: { in: candidates } },
+      select: {
+        usedBy: true,
+        game: gameSelect,
+      },
+    });
+
+    if (!record) {
+      return res.status(404).json({ success: false, message: "Key não encontrada" });
+    }
+
+    if (claimed.count === 0) {
+      const message =
+        record.usedBy === discordId ? "Você já resgatou esta key" : "Esta key já foi utilizada";
+      return res.status(400).json({ success: false, message });
     }
 
     return res.json({
       success: true,
-      appId: existing.gameAppId,
-      gameName: existing.gameName,
+      appId: record.game.appId,
+      gameName: record.game.name,
       message: "Key resgatada com sucesso!",
     });
   } catch (err) {
-    console.error("[redeem]", err);
+    logSafeError("redeem", err);
     return res.status(500).json({ success: false, message: "Erro interno" });
   }
 });
@@ -85,7 +126,9 @@ router.post("/redeem", async (req, res) => {
 router.get("/activated", async (req, res) => {
   try {
     const discordId =
-      typeof req.query.discordId === "string" ? req.query.discordId.trim() : null;
+      typeof req.query.discordId === "string" && req.query.discordId.trim().length > 0
+        ? req.query.discordId.trim()
+        : null;
 
     if (!discordId) {
       return res.json({ games: [] });
@@ -95,23 +138,23 @@ router.get("/activated", async (req, res) => {
       where: { usedBy: discordId, status: KeyStatus.USED },
       select: {
         key: true,
-        gameAppId: true,
-        gameName: true,
         redeemedAt: true,
+        usedAt: true,
+        game: gameSelect,
       },
       orderBy: { redeemedAt: "desc" },
     });
 
     return res.json({
-      games: keys.map((k) => ({
-        appId: k.gameAppId,
-        gameName: k.gameName,
-        key: k.key,
-        activatedAt: k.redeemedAt,
+      games: keys.map((item) => ({
+        appId: item.game.appId,
+        gameName: item.game.name,
+        key: item.key,
+        activatedAt: item.redeemedAt ?? item.usedAt,
       })),
     });
   } catch (err) {
-    console.error("[activated]", err);
+    logSafeError("activated", err);
     return res.status(500).json({ games: [] });
   }
 });
@@ -119,56 +162,55 @@ router.get("/activated", async (req, res) => {
 // POST /api/keys/validate
 router.post("/validate", async (req, res) => {
   try {
-    const inputKey = extractKey(req.body);
-    if (!inputKey) {
+    const candidates = keyCandidates((req.body as { key?: unknown } | undefined)?.key);
+    if (!candidates) {
       return res.status(400).json({ error: "Invalid key input." });
     }
 
+    const discordId =
+      typeof (req.body as { discordId?: unknown }).discordId === "string"
+        ? ((req.body as { discordId: string }).discordId.trim() || null)
+        : null;
+    const discordUsername =
+      typeof (req.body as { discordUsername?: unknown }).discordUsername === "string"
+        ? ((req.body as { discordUsername: string }).discordUsername.trim() || null)
+        : null;
+
     const now = new Date();
 
-    const result = await prisma.$transaction(async (tx) => {
-      const updateResult = await tx.key.updateMany({
-        where: {
-          key: inputKey,
-          status: KeyStatus.AVAILABLE,
-        },
-        data: {
-          status: KeyStatus.USED,
-          usedAt: now,
-        },
-      });
-
-      const record = await tx.key.findUnique({
-        where: { key: inputKey },
-        select: {
-          gameAppId: true,
-          gameName: true,
-          status: true,
-        },
-      });
-
-      return {
-        updateCount: updateResult.count,
-        record,
-      };
+    const updateResult = await prisma.key.updateMany({
+      where: { key: { in: candidates }, status: KeyStatus.AVAILABLE },
+      data: {
+        status: KeyStatus.USED,
+        usedAt: now,
+        usedBy: discordId,
+        usedByUsername: discordUsername,
+        redeemedAt: now,
+      },
     });
 
-    if (!result.record) {
+    const record = await prisma.key.findFirst({
+      where: { key: { in: candidates } },
+      select: { game: gameSelect },
+    });
+
+    if (!record) {
       return res.status(404).json({ error: "Key not found." });
     }
 
-    if (result.updateCount === 0) {
+    if (updateResult.count === 0) {
       return res.status(400).json({ error: "Key has already been used." });
     }
 
     return res.json({
       success: true,
       game: {
-        appId: result.record.gameAppId,
-        name: result.record.gameName,
+        appId: record.game.appId,
+        name: record.game.name,
       },
     });
-  } catch {
+  } catch (err) {
+    logSafeError("validate", err);
     return res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -176,17 +218,16 @@ router.post("/validate", async (req, res) => {
 // POST /api/keys/check
 router.post("/check", async (req, res) => {
   try {
-    const inputKey = extractKey(req.body);
-    if (!inputKey) {
+    const candidates = keyCandidates((req.body as { key?: unknown } | undefined)?.key);
+    if (!candidates) {
       return res.status(400).json({ error: "Invalid key input." });
     }
 
-    const record = await prisma.key.findUnique({
-      where: { key: inputKey },
+    const record = await prisma.key.findFirst({
+      where: { key: { in: candidates } },
       select: {
-        gameAppId: true,
-        gameName: true,
         status: true,
+        game: gameSelect,
       },
     });
 
@@ -202,11 +243,12 @@ router.post("/check", async (req, res) => {
       valid: record.status === KeyStatus.AVAILABLE,
       status: record.status,
       game: {
-        appId: record.gameAppId,
-        name: record.gameName,
+        appId: record.game.appId,
+        name: record.game.name,
       },
     });
-  } catch {
+  } catch (err) {
+    logSafeError("check", err);
     return res.status(500).json({ error: "Internal server error." });
   }
 });
